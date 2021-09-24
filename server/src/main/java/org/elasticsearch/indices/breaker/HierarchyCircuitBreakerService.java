@@ -58,7 +58,7 @@ public class HierarchyCircuitBreakerService extends CircuitBreakerService {
     private final Map<String, CircuitBreaker> breakers;
 
     public static final Setting<Boolean> USE_REAL_MEMORY_USAGE_SETTING =
-        Setting.boolSetting("indices.breaker.total.use_real_memory", true, Property.NodeScope);
+        Setting.boolSetting("indices.breaker.total.use_real_memory", true, Property.Dynamic, Property.NodeScope);
 
     public static final Setting<ByteSizeValue> TOTAL_CIRCUIT_BREAKER_LIMIT_SETTING =
         Setting.memorySizeSetting("indices.breaker.total.limit", settings -> {
@@ -90,7 +90,7 @@ public class HierarchyCircuitBreakerService extends CircuitBreakerService {
     public static final Setting<CircuitBreaker.Type> IN_FLIGHT_REQUESTS_CIRCUIT_BREAKER_TYPE_SETTING =
         new Setting<>("network.breaker.inflight_requests.type", "memory", CircuitBreaker.Type::parseValue, Property.NodeScope);
 
-    private final boolean trackRealMemoryUsage;
+    private volatile boolean trackRealMemoryUsage;
     private volatile BreakerSettings parentSettings;
 
     // Tripped count for when redistribution was attempted but wasn't successful
@@ -158,6 +158,7 @@ public class HierarchyCircuitBreakerService extends CircuitBreakerService {
             CIRCUIT_BREAKER_OVERHEAD_SETTING,
             (name, updatedValues) -> updateCircuitBreakerSettings(name, updatedValues.v1(), updatedValues.v2()),
             (s, t) -> {});
+        clusterSettings.addSettingsUpdateConsumer(USE_REAL_MEMORY_USAGE_SETTING, this::setTrackRealMemoryUsage);
 
         this.overLimitStrategy = overLimitStrategyFactory.apply(this.trackRealMemoryUsage);
     }
@@ -179,6 +180,10 @@ public class HierarchyCircuitBreakerService extends CircuitBreakerService {
     private void setTotalCircuitBreakerLimit(ByteSizeValue byteSizeValue) {
         this.parentSettings = new BreakerSettings(CircuitBreaker.PARENT, byteSizeValue.getBytes(), 1.0,
             CircuitBreaker.Type.PARENT, null);
+    }
+
+    private void setTrackRealMemoryUsage(boolean trackRealMemoryUsage) {
+        this.trackRealMemoryUsage = trackRealMemoryUsage;
     }
 
     /**
