@@ -46,11 +46,27 @@ public class SameShardAllocationDecider extends AllocationDecider {
         Property.NodeScope
     );
 
-    private volatile boolean sameHost;
+    public static final Setting<Boolean> CLUSTER_ROUTING_ALLOCATION_SAME_HOST_NAME_SETTING = Setting.boolSetting(
+            "cluster.routing.allocation.same_shard.host_name",
+            false,
+            Property.Dynamic,
+            Property.NodeScope
+    );
+
+    private volatile boolean sameHostAddress;
+    private volatile boolean sameHostName;
 
     public SameShardAllocationDecider(Settings settings, ClusterSettings clusterSettings) {
-        this.sameHost = CLUSTER_ROUTING_ALLOCATION_SAME_HOST_SETTING.get(settings);
-        clusterSettings.addSettingsUpdateConsumer(CLUSTER_ROUTING_ALLOCATION_SAME_HOST_SETTING, this::setSameHost);
+        setSameHost(
+            CLUSTER_ROUTING_ALLOCATION_SAME_HOST_SETTING.get(settings),
+            CLUSTER_ROUTING_ALLOCATION_SAME_HOST_NAME_SETTING.get(settings)
+        );
+        clusterSettings.addSettingsUpdateConsumer(
+            CLUSTER_ROUTING_ALLOCATION_SAME_HOST_SETTING,
+            CLUSTER_ROUTING_ALLOCATION_SAME_HOST_NAME_SETTING,
+            this::setSameHost,
+            this::validateSameHostMode
+        );
     }
 
     /**
@@ -58,8 +74,16 @@ public class SameShardAllocationDecider extends AllocationDecider {
      * should not be allowed, even when multiple nodes are being run on the same host.  {@code false}
      * otherwise.
      */
-    private void setSameHost(boolean sameHost) {
-        this.sameHost = sameHost;
+    private void setSameHost(boolean sameHostAddress, boolean sameHostName) {
+        validateSameHostMode(sameHostAddress, sameHostName);
+        this.sameHostAddress = sameHostAddress;
+        this.sameHostName = sameHostName;
+    }
+
+    private void validateSameHostMode(boolean sameHostAddress, boolean sameHostName) {
+        if (sameHostAddress && sameHostName) {
+            throw new IllegalArgumentException("Same host address mode and same host name mode can not both be true.");
+        }
     }
 
     private static final Decision YES_NONE_HOLD_COPY = Decision.single(
@@ -78,7 +102,7 @@ public class SameShardAllocationDecider extends AllocationDecider {
     public Decision canAllocate(ShardRouting shardRouting, RoutingNode node, RoutingAllocation allocation) {
         Iterable<ShardRouting> assignedShards = allocation.routingNodes().assignedShards(shardRouting.shardId());
         Decision decision = decideSameNode(shardRouting, node, allocation, assignedShards);
-        if (decision.type() == Decision.Type.NO || sameHost == false) {
+        if (decision.type() == Decision.Type.NO || (sameHostAddress == false && sameHostName == false)) {
             // if its already a NO decision looking at the node, or we aren't configured to look at the host, return the decision
             return decision;
         }
@@ -88,12 +112,21 @@ public class SameShardAllocationDecider extends AllocationDecider {
         }
         if (node.node() != null) {
             assert Strings.hasLength(node.node().getHostAddress()) : node;
+            boolean sameHost = false;
             for (ShardRouting assignedShard : assignedShards) {
                 DiscoveryNode checkNode = allocation.nodes().get(assignedShard.currentNodeId());
                 assert checkNode != null;
                 // check if its on the same host as the one we want to allocate to
-                assert Strings.hasLength(checkNode.getHostAddress()) : checkNode;
-                if (checkNode.getHostAddress().equals(node.node().getHostAddress())) {
+                if (sameHostAddress) {
+                    assert Strings.hasLength(checkNode.getHostAddress()) : checkNode;
+                    sameHost = checkNode.getHostAddress().equals(node.node().getHostAddress());
+                }
+                if (sameHostName) {
+                    assert Strings.hasLength(checkNode.getHostName()) : checkNode;
+                    sameHost = checkNode.getHostName().equals(node.node().getHostName());
+                }
+
+                if (sameHost) {
                     return allocation.debugDecision() ? debugNoAlreadyAllocatedToHost(node, allocation) : Decision.NO;
                 }
             }
